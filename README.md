@@ -1,5 +1,6 @@
-# plithon
-## PL/I to Python transpiler to learn PL/I, Python and PLY
+# plithon 
+... is a PL/I to Python transpiler, written in Python <br>
+***Target***: anybody who wants learn PL/I, Python and PLY
 ## Installation
 ### Components needed
 - Python 3.x needed
