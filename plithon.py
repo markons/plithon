@@ -1,4 +1,4 @@
-# Version 1.08
+# Version 1.09
 # =============================================================================
 # This version supports following PL/I constructs:
 #    
@@ -19,12 +19,19 @@
 #  10  one-dimensional arrays are now supported (only integer indexing is possible)
 #  11  record i/o simple version (open close read write) works
 # ============================================================================= 
-# Important considerations:
-#   multiple level indentation is supported 
+# New features in 1.09:
+#   - 2D arrays supported
+#   - mySql parameters (host,user,password,DB-name) are read from a local file 
+#   - several minor error corrections
 # =============================================================================
 # ============================================================================= 
 # Open:
-#   comments are not identified ???
+#   define and read simple structures like this (long-term implementation):
+#   dcl 1 struc,
+#         2 first_name    char(30),
+#         2 family_name   char(30),
+#         2 salary        char(10),
+#         2 dummy         char(10);      
 # =============================================================================
 # Development environment is the Python Spyder IDE
 # ============================================================================= 
@@ -36,6 +43,8 @@ import ply.yacc as yacc
 import sys, os
 
 from datetime import datetime
+
+level=1
 
 # Getting the current date and time
 dt = datetime.now()
@@ -52,7 +61,7 @@ tokens = (
     'COLON', 'SEMICOLON', 'COMMA',  
     'PUT', 'SKIP', 'LIST', 'END', 'WHEN', 'OTHER', 'SELECT', 'DO', 'WHILE',
     'PROC', 'OPTIONS', 'MAIN', 'DCL', 'FIXED', 'BIN', 'CHAR',  
-    'IF', 'THEN', 'ELSE', 'BLOCK_COMMENT', 'SUBSTR', 'CONCAT','DECIMAL',
+    'IF', 'THEN', 'ELSE', 'BLOCK_COMMENT', 'SUBSTR', 'CONCAT','DECIMAL','MOD',
     'EXEC', 'SQL', 'INTO', 'STRING', 'INDEX', 'GET',
     'OPEN','CLOSE','READ','WRITE','FILE','FROM','MODE','INPUT','OUTPUT'
 )
@@ -105,6 +114,7 @@ reserved = {
     'while': 'WHILE',  
     'substr': 'SUBSTR',  
     'index': 'INDEX',
+    'mod': 'MOD',
     'into': 'INTO',
     'exec': 'EXEC',
     'sql': 'SQL',
@@ -128,7 +138,7 @@ def enablePrint():
     sys.stdout = sys.__stdout__
 
 # Disable print for production version
-blockPrint()
+# blockPrint()
 
 # Identifiers (variables)
 def t_ID(t):
@@ -177,9 +187,7 @@ t_STRING = r'\"([^\\"]|\\.)*\"'       # Double-quoted strings for SQL
 # Build the lexer
 lexer = lex.lex()
 
-# =============================================================================
-# Indentation is made on basis of the generated raw Python code
-# =============================================================================
+
 def indent_block(code, level=1, is_function=False):
     """
     Creates a block of code with indentation based on the level and whether it's within a function.
@@ -192,57 +200,14 @@ def indent_block(code, level=1, is_function=False):
     Returns:
         The indented code string.
     """
-    indent = "  " * level
-    shift = "  "
+    indent = "  " * level    
     lines = code.splitlines()
-    indented_lines = []    
-     
-    # keyword_list = ['do', 'if', 'else:', 'select', 'when', 'other', 'while', 'elif']
-    keyword_list = ['if', 'else:', 'while', 'elif']
-    after_else = False
-    after_elif = False 
-    
+    indented_lines = [] 
     for line in lines:
-        print("line::", line, level, flush=True)        
-        split_line = line.split()  # split the line into words
-        if split_line and line.split()[0] in keyword_list and not line.startswith("if __name__ == '__main__'"): #extra check needed for if
-            print("in_keywords:", line, flush=True)
-            if line.strip().startswith("else") or line.strip().startswith("elif"):
-                print("in_else:", line, flush=True)
-                level = level - 1
-                indent = level * shift 
-                after_else = True
-            indented_lines.append(indent + line)  
-            level = level + 1                                   
-            indent = level * shift   
-            
-            print("end_keywords:", level, flush=True)
-        elif line.strip().startswith("#end simulated"):
-            print("end in:", line, flush=True)
-            #indented_lines.append(indent + line)
-            level = level - 1
-            indent = level * shift
-        elif line.startswith("if __name__ == '__main__'") or line.startswith("def "): 
-            print("start_or_end:", line, flush=True)
-            if line.strip().startswith("def execute_sql_query"):
-                print("start_sql:", flush=True)
-                indented_lines.append(shift + line.strip())  
-            else:    
-                indented_lines.append(line.strip())  
-            print("indented:", ">", line.strip(), "<", flush=True)                           
-        else:    
-            print("else_case=any other statement type:", ">", line, "<", flush=True)
-            indented_lines.append(indent + line)
-            print("indented:", ">", indent + line, "<", flush=True)
-            if after_else:
-                level = level - 1
-                indent = level * shift
-                after_else = False    
-        print("end_level:", level, flush=True)    
-          
-    return "\n".join(indented_lines)    
+        indented_lines.append(indent + line)
+    return "\n".join(indented_lines)
 
-# Parsing rules
+# Print parsing rules for trace
 def print_tokens(input_text):
     lexer.input(input_text)
     while True:
@@ -251,6 +216,7 @@ def print_tokens(input_text):
             break
         print(token)
     
+# PL/I program: progname:proc options(main);<declares> <execs> end progname;
 def p_program(p):
     '''program : procedure_header declaration_list statement_list END ID SEMICOLON'''
     print('in program:', f"p[:] values: {p[:]}", flush=True)
@@ -260,13 +226,15 @@ def p_program(p):
     # Combine the procedure header, declarations, and the list of statements
     # Declaration list and statement list are both lists, so they should be joined properly
     declarations = "\n".join(p[2]) if p[2] else ""
+    declarations = indent_block(declarations, 2)
     statements = "\n".join(p[3]) if p[3] else ""
+    statements = indent_block(statements, 2)
     
     # The main function code, including the call to the procedure itself in the if __name__ block
     p[0] = f"{p[1]}\n{declarations}\n{statements}\nif __name__ == '__main__':\n    {procedure_name}()"
-    p[0] = indent_block(p[0], level=1, is_function=True)
+    p[0] = indent_block(p[0], level=0, is_function=True) 
     
-    print('end program:', p[0], flush=True)    
+    print('end program:\n', p[0], flush=True)    
 
 # Procedure header and its syntax
 def p_procedure_header(p):
@@ -275,24 +243,78 @@ def p_procedure_header(p):
     p[0] = f"def {p[1]}():"
     print('in procedure_header result:', f"p[:] values: {p[:]}", flush=True)
     
+# def p_variable_access(p):
+#     '''variable_access : ID LPAREN NUMBER COMMA NUMBER RPAREN
+#                        | ID LPAREN ID COMMA ID RPAREN
+#                        | ID LPAREN NUMBER RPAREN
+#                        | ID LPAREN ID RPAREN
+#                        | ID'''
+#     print('in variable_access', f"p[:] values: {p[:]}", flush=True)                    
+#     if len(p) == 7:  # Two-dimensional array access
+#         p[0] = f"{p[1]}[{p[3] - 1}][{p[5] - 1}]"  # Adjust indices for 0-based indexing
+#     elif len(p) == 5:  # One-dimensional array access or variable access
+#         if isinstance(p[3], int):
+#             p[0] = f"{p[1]}[{p[3] - 1}]"
+#         else:
+#             p[0] = f"{p[1]}[{p[3]}]"  # Assume variable index without adjustment
+#     else:
+#         p[0] = p[1]
+#     print('end variable_access:', p[0], flush=True)  
+
 def p_variable_access(p):
-    '''variable_access : ID LPAREN NUMBER RPAREN
-                       | ID LPAREN ID RPAREN
-                       | ID'''
-    print('in variable_access', f"p[:] values: {p[:]}", flush=True)                    
-    if len(p) == 5:
-        # Array access: Convert PL/I array access to Python format (0-based index)
-        # Check if the index is a number or another variable
-        if isinstance(p[3], int):
-            # If it's a number, subtract 1 for 0-based indexing in Python
-            p[0] = f"{p[1]}[{p[3] - 1}]"
-        else:
-            # If it's an identifier, assume it's a variable for indexing, no subtraction
-            p[0] = f"{p[1]}[{p[3]} - 1]"
+    """
+    variable_access : ID LPAREN NUMBER COMMA NUMBER RPAREN
+                   | ID LPAREN ID COMMA ID RPAREN
+                   | ID LPAREN ID COMMA NUMBER RPAREN
+                   | ID LPAREN NUMBER RPAREN                   
+                   | ID LPAREN ID RPAREN
+                   | ID                          
+    """   
+     
+    #| ID LPAREN NUMBER COMMA NUMBER RPAREN ASSIGN expression  
+    print('in variable_access', f"p[:] values: {p[:]}", flush=True) 
+    print('len(p)', len(p), flush=True) 
+    if len(p) == 7:  # Two-dimensional array access or assignment
+        print('p[1]:', p[1], flush=True) 
+        print('p[2]:', p[2], flush=True) 
+        print('p[3]:', p[3], flush=True) 
+        print('p[4]:', p[4], flush=True) 
+        print('p[5]:', p[5], flush=True) 
+        print('p[6]:', p[6], flush=True) 
+        # print('p[7]:', p[7], flush=True)
+        
+        if len(p) == 7:  # Assignment
+            # Handle integer indices with adjustment
+            if isinstance(p[3], int) and isinstance(p[5], int):
+                print('case(1)', flush=True) 
+                #p[0] = f"{p[1]}[{p[3] - 1}][{p[5] - 1}] = {p[7]}"
+                p[0] = f"{p[1]}[{p[3]}][{p[5]}]"
+            # Check if ID with NUMBER pattern
+            elif isinstance(p[3], str) and isinstance(p[5], int):
+                print('case(1) - ID with NUMBER', flush=True)
+                p[0] = f"{p[1]}[{p[3]}][{p[5]}]"  # Handle variable and integer index    
+            else:
+                # Handle variable indices (no adjustment)
+                print('case(2)', flush=True) 
+                # p[0] = f"{p[1]}[{p[3]}][{p[5]}] = {p[7]}"
+                p[0] = f"{p[1]}[{p[3]}][{p[5]}]"
+                
+        else:  # Access
+            # Handle integer indices with adjustment
+            if isinstance(p[3], int) and isinstance(p[5], int):
+                print('case(3)', flush=True) 
+                p[0] = f"{p[1]}[{p[3]}][{p[5]}]"
+            else:
+                # Handle variable indices (no adjustment)
+                print('case(4)', flush=True) 
+                p[0] = f"{p[1]}[{p[3]}][{p[5]}]"
+                
+                
+    elif len(p) == 5:  # One-dimensional array access or variable access or assignment
+        p[0] = f"{p[1]}[{p[3]}]"                             
     else:
-        # Scalar variable access
         p[0] = p[1]
-    print('end variable_access:', p[0], flush=True)
+    print('end variable_access:', p[0], flush=True)      
     
 def p_declaration_list(p):
     '''declaration_list : declaration_list declaration SEMICOLON
@@ -303,6 +325,7 @@ def p_declaration_list(p):
     else:
         p[0] = [p[1]]
 
+   
 def p_declaration(p):
     '''declaration : DCL id_list type_declaration
                    | DCL id_list array_spec type_declaration'''
@@ -317,18 +340,42 @@ def p_declaration(p):
                 decls.append(f"{var} = ''")  # Initialize CHAR variables as empty strings
     elif len(p) == 5:  # Array declaration
         typ = p[4].upper()
-        array_size = p[3]  # Get the array size from the array_spec
+        print('typ:', typ, flush=True)
+        if isinstance(p[3], int):  # Check if size is an integer (one-dimensional)
+            array_dims = (p[3],)  # Convert size to a tuple
+        else:  # Assuming p[3] is a tuple for two-dimensional arrays
+            array_dims = p[3]
+        print('array_dims:', array_dims, flush=True)
+
         for var in p[2]:
             if "FIXED BIN" in typ:
-                decls.append(f"{var} = [0] * {array_size}")
+                if len(array_dims) == 1:
+                    decls.append(f"{var} = [0] * {array_dims[0] + 2}")
+                    # Initialize the first element of the array
+                    decls.append(f"{var}[0] = 0 #pseudo-init")
+                elif len(array_dims) == 2:
+                    decls.append(f"{var} = [[0] * {array_dims[1] + 2} for _ in range({array_dims[0] + 2})]")
+                    # Initialize the first element of the 2D array
+                    decls.append(f"{var}[0][0] = 0 #pseudo-init")
             elif "CHAR" in typ:
-                decls.append(f"{var} = [''] * {array_size}")  # Initialize CHAR arrays
+                if len(array_dims) == 1:
+                    decls.append(f"{var} = [''] * {array_dims[0] + 2}")
+                    # Initialize the first element of the array
+                    decls.append(f"{var}[0] = '' #pseudo-init")
+                elif len(array_dims) == 2:
+                    decls.append(f"{var} = [[''] * {array_dims[1] + 2} for _ in range({array_dims[0] + 2})]")
+                    # Initialize the first element of the 2D array
+                    decls.append(f"{var}[0][0] = '' #pseudo-init")
+                    
     p[0] = "\n".join(decls)
+    print('end declaration:', p[0], flush=True)
+
 
 def p_id_list(p):
     '''id_list : ID
                | id_list COMMA ID
                | id_list COMMA ID array_spec'''
+    print('in id_list:', f"p[:] values: {p[:]}", flush=True)             
     if len(p) == 2:
         p[0] = [p[1]]
     elif len(p) == 4:  # ID or array spec list (comma separated)
@@ -336,16 +383,25 @@ def p_id_list(p):
     elif len(p) == 5:  # Handle array spec as part of id_list
         p[0] = p[1] + [f"{p[3]}({p[4]})"]
 
+# def p_array_spec(p):
+#     '''array_spec : LPAREN NUMBER RPAREN'''
+#     p[0] = p[2]  # The array size
+    
 def p_array_spec(p):
-    '''array_spec : LPAREN NUMBER RPAREN'''
-    p[0] = p[2]  # The array size
-
+    '''array_spec : LPAREN NUMBER RPAREN
+                 | LPAREN NUMBER COMMA NUMBER RPAREN'''
+    print('in array_spec:', f"p[:] values: {p[:]}", flush=True)               
+    if len(p) == 4:
+        p[0] = (p[2])  # One-dimensional array
+    elif len(p) == 6:
+        p[0] = (p[2], p[4])  # Two-dimensional array
     
 def p_type_declaration(p):
     '''type_declaration : FIXED BIN LPAREN NUMBER RPAREN
                         | CHAR LPAREN NUMBER RPAREN'''
+    print('in type_declaration:', f"p[:] values: {p[:]}", flush=True)                    
     if len(p) == 6:  # FIXED BIN(n)
-        p[0] = f"{p[1]} {p[2]}({p[4]})"
+        p[0] = f"{p[1]} {p[2]}({p[4] + 2})" #additional dummy first entry!
     elif p[1].lower() == 'char':  # CHAR(n)
         p[0] = f"{p[1]}({p[3]})"
 
@@ -428,6 +484,7 @@ def p_expression(p):
                   | NUMBER
                   | CHAR_CONST
                   | SUBSTR
+                  | MOD
                   | INDEX
                   | DECIMAL
                   | variable_access'''
@@ -456,8 +513,13 @@ def p_expression_substr(p):
     elif len(p) == 7:  # SUBSTR with only start
         start = p[5] - 1
         p[0] = f"{p[3]}[{start}:]"
-    print('end substr:', p[0], flush=True)      
-       
+    print('end substr:', p[0], flush=True)    
+    
+def p_expression_mod(p):
+    '''expression : MOD LPAREN ID COMMA NUMBER RPAREN'''
+    print('in mod:', f"p[:] values: {p[:]}", flush=True)              
+    p[0] = f"{p[3]}%{p[5]}"
+    print('end substr:', p[0], flush=True)        
         
 def p_expression_index(p):
     '''expression : INDEX LPAREN ID COMMA CHAR_CONST RPAREN'''    
@@ -493,8 +555,8 @@ def p_if_statement(p):
     then_code = "\n".join(then_block)
     else_code = "\n".join(else_block)
       
-    # p[0] = f"if {p[2]}:\n{indent_block(then_code, level=1)}\nelse:\n{indent_block(else_code, level=1)}"
-    p[0] = f"if {p[2]}:\n{then_code}\nelse:\n{else_code}"
+    p[0] = f"if {p[2]}:\n{indent_block(then_code, level=1)}\nelse:\n{indent_block(else_code, level=1)}"
+    # p[0] = f"if {p[2]}:\n{then_code}\nelse:\n{else_code}"
         
 
 def p_do_end_block(p):
@@ -532,9 +594,24 @@ def p_put_statement(p):
     
 def p_get_list_statement(p):
     '''get_list_statement : GET LIST LPAREN id_list RPAREN SEMICOLON'''
+    print('in get_list:', f"p[:] values: {p[:]}", flush=True)
     vars_to_get = p[4]  # List of variable names
-    python_input_statements = '\n'.join([f'{var} = input("Enter {var}: ")' for var in vars_to_get])
-    p[0] = python_input_statements
+    
+    # Generate input statements with dynamic type checking
+    python_input_statements = []
+    for var in vars_to_get:
+        python_input_statements.append(f'''
+try:
+    {var}_input = input("Enter {var}: ")
+    {var} = int({var}_input)
+except ValueError:
+    {var} = {var}_input  # Fall back to string if not an integer
+''')
+    
+    # Join statements to form the complete block of code
+    p[0] = '\n'.join(python_input_statements)
+    print('end get_list:', p[0], flush=True)
+
     
 # List of variable names (e.g., var1, var2, var3)
 def p_id_list_multiple(p):
@@ -574,20 +651,22 @@ def p_select_statement(p):
 
     # Create the initial if statement
     python_code = f"if {select_var} == ({when_cases[0][0]}):\n{indent_block(when_cases[0][1], level=1)}"
+    #python_code = f"if {select_var} == ({when_cases[0][0]}):\n{when_cases[0][1]}"
 
     # Add elif statements for the rest of the cases
     for condition, code in when_cases[1:]:
         python_code += f"\nelif {select_var} == {condition}:\n{indent_block(code, level=1)}"
+        #python_code += f"\nelif {select_var} == {condition}:\n{code}"
 
     # Handle the 'other' block if present
     if p[7]:  # Use p[7] for the other block
-        other_block = indent_block(p[7], level=1)
+        other_block = indent_block(p[7], level=1)       
         python_code += f"\nelse:\n{other_block}"
 
     # Add the 'end' statement
-    python_code += "\n"
+    python_code += "\n #end-select"
 
-    p[0] = python_code
+    p[0] = "#select-start \n" + python_code
     print('end select_statement:', p[0])
 
 
@@ -645,11 +724,12 @@ def p_do_while_statement(p):
     loop_condition = p[4]  # This holds the relational expression
     stmt = ''
     if isinstance(p[7], list):        
-        loop_body = "\n".join([stmt for stmt in p[7]])
+        loop_body = "\n".join([stmt for stmt in p[7]])        
         print('stmt in do_while_statement:', loop_body, flush=True)
     else:
         loop_body = p[7]
         print('p[7] is no list:', p[7], flush=True)
+    loop_body = indent_block(loop_body, level + 1)    
     
     # Translate to Python's 'while' construct    
     loop_body = loop_body + "\n" + "#end simulated" 
@@ -694,32 +774,66 @@ def p_close_file(p):
     p[0] = f"{fname}.close()"
     print('end close:', p[0])    
     
-# =============================================================================
-# MySql executor - not complete. DB, table name, user+password must be  
-# initialized by parameter.
-# ============================================================================= 
 import mysql.connector
+import os
+
+host = '' 
+user = ''
+password = '' 
+db_name = '' 
+
+def read_parameters_from_file(filename):
+    if os.path.exists(filename):
+        with open(filename, 'r') as file:
+            parameter_list = file.read().strip()
+        return parameter_list
+    else:
+        print(f"***Error: File '{filename}' not found. SQL error!")
+        return None
 
 def p_sql_statement(p):
     'sql_statement : EXEC SQL STRING INTO ID SEMICOLON'
     print('in sql_statement:', f"p[:] values: {p[:]}", flush=True)
     
-    # Extract the SQL query and PL/I variable
-    sql_query = p[3].strip('"')  # Clean the SQL query string by stripping the extra quotes
-    pl1_var = p[5]  # The variable to store the result
+    global host, user, password, db_name
+
+    # Load parameters from the file and strip any surrounding quotes
+    filename = "c:/temp/creds.txt"
+    parameter_list = read_parameters_from_file(filename)
     
-    # Generate Python code to execute the SQL query and assign the result
+    # Split into key-value pairs and strip unwanted quotes
+    params = {}
+    pairs = parameter_list.split(', ')
+    for pair in pairs:
+        key, value = pair.split('=')
+        params[key.strip()] = value.strip().strip('"').strip("'")
+
+    # Assign parameters
+    host = params['host']
+    user = params['user']
+    password = params['password']
+    db_name = params['database']
+    
+    print('Parameters:', host, user, password, db_name)
+    
+    # Extract the SQL query and PL/I variable
+    sql_query = p[3].strip('"')
+    pl1_var = p[5]
+    
+    # Generate Python code for SQL execution with parameters
     p[0] = f'''
 import mysql.connector
 
-def execute_sql_query():
+def execute_sql_query(host, db_name, user, password):
     try:
-        # Log that the function is called
         print("*** Executing SQL Query: {sql_query}")
         
-        # Establish MySQL connection
+        # Establish MySQL connection with parameters
         connection = mysql.connector.connect(
-            host="localhost", user="root", password="admin", database="sakila"
+            host=host,
+            user=user,
+            password=password,
+            database=db_name
         )
         cursor = connection.cursor()
 
@@ -739,19 +853,19 @@ def execute_sql_query():
         return {pl1_var}
 
     except mysql.connector.Error as err:
-        # Handle SQL error details (SQLCODE, SQLSTATE, and error message)
-        sqlcode = err.errno  # MySQL error number
-        sqlstate = err.sqlstate  # MySQL SQLSTATE code
-        error_message = err.msg  # Detailed error message
-
-        # Log SQL error
+        sqlcode = err.errno
+        sqlstate = err.sqlstate
+        error_message = err.msg
         print(f"SQL Error: SQLCODE={{sqlcode}}, SQLSTATE={{sqlstate}}, Message={{error_message}}")
         return None
 
-# Call the function to execute the SQL query
-{pl1_var} = execute_sql_query()
+print('Parameters:', host, user, password, db_name)
+{pl1_var} = execute_sql_query(host, db_name, user, password)
 print('Final result stored in:', {pl1_var})
 '''
+
+
+
 
 def p_pl1_var(p):
     '''pl1_var : ID'''
@@ -866,7 +980,7 @@ pl1_code = execute_transpiler()
 # Call the (yacc) parser
 # =============================================================================
 result = parser.parse(pl1_code)
-# result = parser.parse(pl1_code, debug=True)
+#result = parser.parse(pl1_code, debug=True)
 
 # print("Tokens:")
 # print_tokens(pl1_code)
